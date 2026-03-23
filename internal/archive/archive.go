@@ -23,9 +23,12 @@ func BuildUploadArchive(localSource string, rawBoxTarget string) (UploadArchive,
 	if err != nil {
 		return UploadArchive{}, err
 	}
-	info, err := os.Stat(sourcePath)
+	info, err := os.Lstat(sourcePath)
 	if err != nil {
 		return UploadArchive{}, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return UploadArchive{}, errors.New("symlink upload is not supported")
 	}
 
 	boxTarget, entryName, err := planUploadTarget(sourcePath, info, rawBoxTarget)
@@ -136,7 +139,7 @@ func writeArchive(file *os.File, sourcePath string, sourceInfo os.FileInfo, root
 			if walkErr != nil {
 				return walkErr
 			}
-			info, err := entry.Info()
+			info, err := os.Lstat(currentPath)
 			if err != nil {
 				return err
 			}
