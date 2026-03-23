@@ -256,6 +256,49 @@ func TestMainBoxExecSupportsExplicitCommandDelimiter(t *testing.T) {
 	require.Empty(t, stderr.String())
 }
 
+func TestMainBoxExecSendsDeadlineWorkdirAndEnvOverrides(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	var req api.ExecBoxRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/boxes/my-box/execs/stream", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		encoder := json.NewEncoder(w)
+		require.NoError(t, encoder.Encode(api.ExecStreamEvent{Type: "exit", ExitCode: 0}))
+	}))
+	defer server.Close()
+
+	require.NoError(t, updateEndpoint(configPath, server.URL))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	before := time.Now()
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"box", "exec", "my-box",
+		"--deadline", "2m",
+		"--user", "root",
+		"--workdir", "/workspace",
+		"-e", "HELLO=world",
+		"-e", "LANG=C",
+		"/bin/true",
+	}, stdout, stderr)
+	require.Equal(t, 0, exitCode)
+	require.Empty(t, stdout.String())
+	require.Empty(t, stderr.String())
+	require.Equal(t, []string{"/bin/true"}, req.Command)
+	require.Equal(t, "root", req.User)
+	require.Equal(t, "/workspace", req.Workdir)
+	require.Equal(t, map[string]string{
+		"HELLO": "world",
+		"LANG":  "C",
+	}, req.EnvOverrides)
+	require.WithinDuration(t, before.Add(2*time.Minute), req.DeadlineAt, 10*time.Second)
+}
+
 func TestMainBoxCopyUploadsAndDownloadsArchives(t *testing.T) {
 	configPath := writeLoggedInConfig(t, "http://example.invalid")
 
@@ -561,4 +604,161 @@ func TestMainBoxCreateSupportsImageRefAlias(t *testing.T) {
 	var view api.BoxView
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &view))
 	require.Equal(t, "alias-box", view.BoxID)
+}
+
+func TestMainBoxCreateRejectsMismatchedImageAliases(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"box", "create", "alias-box",
+		"--image", "public.ecr.aws/docker/library/alpine:3.20",
+		"--image-ref", "public.ecr.aws/docker/library/busybox:1.36",
+	}, stdout, stderr)
+	require.Equal(t, 1, exitCode)
+	require.Empty(t, stdout.String())
+	require.Contains(t, stderr.String(), "--image and --image-ref must match")
+}
+
+func TestMainBoxCreateSendsNameAndLabels(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/boxes", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+
+		var req api.CreateBoxRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.Equal(t, "named-box", req.BoxID)
+		require.Equal(t, "Demo Box", req.Name)
+		require.Equal(t, "snap-1", req.SourceSnapID)
+		require.Equal(t, map[string]string{
+			"env":  "prod",
+			"team": "portal",
+		}, req.Labels)
+
+		writeJSONResponse(t, w, http.StatusCreated, api.BoxView{
+			BoxID:        "named-box",
+			DesiredShape: defaultBoxShape,
+			Name:         "Demo Box",
+			Labels: map[string]string{
+				"env":  "prod",
+				"team": "portal",
+			},
+			State: api.BoxState("ready"),
+		})
+	}))
+	defer server.Close()
+
+	require.NoError(t, updateEndpoint(configPath, server.URL))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"box", "create", "named-box",
+		"--snap", "snap-1",
+		"--name", "Demo Box",
+		"--label", "team=portal",
+		"--label", "env=prod",
+	}, stdout, stderr)
+	require.Equal(t, 0, exitCode)
+	require.Empty(t, stderr.String())
+
+	var view api.BoxView
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &view))
+	require.Equal(t, "named-box", view.BoxID)
+	require.Equal(t, "Demo Box", view.Name)
+	require.Equal(t, "portal", view.Labels["team"])
+	require.Equal(t, "prod", view.Labels["env"])
+}
+
+func TestMainSnapListUsesAttachedFilter(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/snaps", r.URL.Path)
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "true", r.URL.Query().Get("attached"))
+		writeJSONResponse(t, w, http.StatusOK, []api.SnapView{{
+			SnapID:   "snap-1",
+			State:    api.SnapState("available"),
+			Attached: true,
+		}})
+	}))
+	defer server.Close()
+
+	require.NoError(t, updateEndpoint(configPath, server.URL))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"snap", "ls",
+		"--attached", "true",
+	}, stdout, stderr)
+	require.Equal(t, 0, exitCode)
+	require.Empty(t, stderr.String())
+
+	var snaps []api.SnapView
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &snaps))
+	require.Len(t, snaps, 1)
+	require.Equal(t, "snap-1", snaps[0].SnapID)
+	require.True(t, snaps[0].Attached)
+}
+
+func TestMainSnapListRejectsInvalidAttachedFilter(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"snap", "ls",
+		"--attached", "maybe",
+	}, stdout, stderr)
+	require.Equal(t, 1, exitCode)
+	require.Empty(t, stdout.String())
+	require.Contains(t, stderr.String(), "--attached must be true or false")
+}
+
+func TestStreamExecReturnsCancelledReason(t *testing.T) {
+	var body bytes.Buffer
+	require.NoError(t, json.NewEncoder(&body).Encode(api.ExecStreamEvent{
+		Type:         "cancelled",
+		CancelReason: "box is stopping",
+	}))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := streamExec(stdout, stderr, bytes.NewReader(body.Bytes()))
+	require.Equal(t, 1, exitCode)
+	require.Empty(t, stdout.String())
+	require.Equal(t, "box is stopping\n", stderr.String())
+}
+
+func TestStreamExecReturnsFailureReason(t *testing.T) {
+	var body bytes.Buffer
+	require.NoError(t, json.NewEncoder(&body).Encode(api.ExecStreamEvent{
+		Type:          "error",
+		FailureReason: "runtime unavailable",
+	}))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := streamExec(stdout, stderr, bytes.NewReader(body.Bytes()))
+	require.Equal(t, 1, exitCode)
+	require.Empty(t, stdout.String())
+	require.Equal(t, "runtime unavailable\n", stderr.String())
+}
+
+func TestStreamExecRejectsUnexpectedEOF(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := streamExec(stdout, stderr, bytes.NewReader(nil))
+	require.Equal(t, 1, exitCode)
+	require.Empty(t, stdout.String())
+	require.Equal(t, "exec stream ended unexpectedly\n", stderr.String())
 }
