@@ -20,12 +20,13 @@ import (
 )
 
 func TestMainAuthLoginWhoAmIAndLogout(t *testing.T) {
+	fixtureTime := time.Unix(1_700_000_000, 0).UTC()
 	identity := api.CurrentOrgIdentityView{
 		User: api.MeView{
 			UserID:       "user-1",
 			PrimaryEmail: "alice@example.com",
 			DisplayName:  "Alice",
-			CreatedAt:    time.Unix(1_700_000_000, 0),
+			CreatedAt:    fixtureTime,
 		},
 		Org: api.OrgView{
 			OrgID:       "org-1",
@@ -33,7 +34,7 @@ func TestMainAuthLoginWhoAmIAndLogout(t *testing.T) {
 			Kind:        api.OrgKind("personal"),
 			Role:        api.MembershipRole("owner"),
 			CreatedBy:   "user-1",
-			CreatedAt:   time.Unix(1_700_000_000, 0),
+			CreatedAt:   fixtureTime,
 		},
 		AuthKind: "api_key",
 	}
@@ -100,6 +101,61 @@ func TestMainAuthLoginWhoAmIAndLogout(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestMainAuthLoginReusesSavedEndpoint(t *testing.T) {
+	fixtureTime := time.Unix(1_700_000_000, 0).UTC()
+	identity := api.CurrentOrgIdentityView{
+		User: api.MeView{
+			UserID:       "user-1",
+			PrimaryEmail: "alice@example.com",
+			DisplayName:  "Alice",
+			CreatedAt:    fixtureTime,
+		},
+		Org: api.OrgView{
+			OrgID:       "org-1",
+			DisplayName: "Alice Personal",
+			Kind:        api.OrgKind("personal"),
+			Role:        api.MembershipRole("owner"),
+			CreatedBy:   "user-1",
+			CreatedAt:   fixtureTime,
+		},
+		AuthKind: "api_key",
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/whoami", r.URL.Path)
+		ak, sk, ok := r.BasicAuth()
+		require.True(t, ok)
+		require.Equal(t, "ak-2", ak)
+		require.Equal(t, "sk-2", sk)
+		writeJSONResponse(t, w, http.StatusOK, identity)
+	}))
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "cli.toml")
+	require.NoError(t, config.Save(configPath, config.File{
+		Endpoint: server.URL,
+		AK:       "ak-old",
+		SK:       "sk-old",
+	}))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"auth", "login",
+		"--ak", "ak-2",
+		"--sk", "sk-2",
+	}, stdout, stderr)
+	require.Equal(t, 0, exitCode)
+	require.Empty(t, stderr.String())
+
+	cfg, err := config.Load(configPath)
+	require.NoError(t, err)
+	require.Equal(t, server.URL, cfg.Endpoint)
+	require.Equal(t, "ak-2", cfg.AK)
+	require.Equal(t, "sk-2", cfg.SK)
+}
+
 func TestMainBoxExecStreamsOutput(t *testing.T) {
 	configPath := writeLoggedInConfig(t, "http://example.invalid")
 
@@ -163,6 +219,37 @@ func TestMainBoxExecSupportsFlagsWithoutCommandDelimiter(t *testing.T) {
 	exitCode := Main(context.Background(), []string{
 		"--config", configPath,
 		"box", "exec", "my-box", "--user", "root", "/bin/sh", "-lc", "echo hello",
+	}, stdout, stderr)
+	require.Equal(t, 0, exitCode)
+	require.Empty(t, stdout.String())
+	require.Empty(t, stderr.String())
+}
+
+func TestMainBoxExecSupportsExplicitCommandDelimiter(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/boxes/my-box/execs/stream", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+
+		var req api.ExecBoxRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.Equal(t, []string{"--user", "remote-flag-value"}, req.Command)
+		require.Empty(t, req.User)
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		encoder := json.NewEncoder(w)
+		require.NoError(t, encoder.Encode(api.ExecStreamEvent{Type: "exit", ExitCode: 0}))
+	}))
+	defer server.Close()
+
+	require.NoError(t, updateEndpoint(configPath, server.URL))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"box", "exec", "my-box", "--", "--user", "remote-flag-value",
 	}, stdout, stderr)
 	require.Equal(t, 0, exitCode)
 	require.Empty(t, stdout.String())
@@ -409,12 +496,12 @@ func TestMainBoxCreateSupportsPositionalBoxIDWithExplicitShapeAndImage(t *testin
 		var req api.CreateBoxRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		require.Equal(t, "my-box", req.BoxID)
-		require.Equal(t, "2c8g", req.DesiredShape)
+		require.Equal(t, "2c4g", req.DesiredShape)
 		require.Equal(t, "public.ecr.aws/docker/library/alpine:3.20", req.SourceImageRef)
 
 		writeJSONResponse(t, w, http.StatusCreated, api.BoxView{
 			BoxID:        "my-box",
-			DesiredShape: "2c8g",
+			DesiredShape: "2c4g",
 			State:        api.BoxState("ready"),
 		})
 	}))
@@ -427,7 +514,7 @@ func TestMainBoxCreateSupportsPositionalBoxIDWithExplicitShapeAndImage(t *testin
 	exitCode := Main(context.Background(), []string{
 		"--config", configPath,
 		"box", "create", "my-box",
-		"--shape", "2c8g",
+		"--shape", "2c4g",
 		"--image", "public.ecr.aws/docker/library/alpine:3.20",
 	}, stdout, stderr)
 	require.Equal(t, 0, exitCode)
@@ -436,5 +523,42 @@ func TestMainBoxCreateSupportsPositionalBoxIDWithExplicitShapeAndImage(t *testin
 	var view api.BoxView
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &view))
 	require.Equal(t, "my-box", view.BoxID)
-	require.Equal(t, "2c8g", view.DesiredShape)
+	require.Equal(t, "2c4g", view.DesiredShape)
+}
+
+func TestMainBoxCreateSupportsImageRefAlias(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/boxes", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+
+		var req api.CreateBoxRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.Equal(t, "alias-box", req.BoxID)
+		require.Equal(t, "public.ecr.aws/docker/library/alpine:3.20", req.SourceImageRef)
+
+		writeJSONResponse(t, w, http.StatusCreated, api.BoxView{
+			BoxID:        "alias-box",
+			DesiredShape: defaultBoxShape,
+			State:        api.BoxState("ready"),
+		})
+	}))
+	defer server.Close()
+
+	require.NoError(t, updateEndpoint(configPath, server.URL))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"box", "create", "alias-box",
+		"--image-ref", "public.ecr.aws/docker/library/alpine:3.20",
+	}, stdout, stderr)
+	require.Equal(t, 0, exitCode)
+	require.Empty(t, stderr.String())
+
+	var view api.BoxView
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &view))
+	require.Equal(t, "alias-box", view.BoxID)
 }
