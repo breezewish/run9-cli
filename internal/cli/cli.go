@@ -18,7 +18,11 @@ import (
 	"github.com/breezewish/run9-cli/internal/config"
 )
 
-const defaultExecDeadline = 15 * time.Minute
+const (
+	defaultExecDeadline = 15 * time.Minute
+	defaultBoxShape     = "1c2g"
+	defaultBoxImageRef  = "public.ecr.aws/docker/library/alpine:3.20"
+)
 
 type commandContext struct {
 	configPath string
@@ -224,24 +228,25 @@ func runBox(ctx context.Context, commandCtx commandContext, args []string) int {
 func runBoxCreate(ctx context.Context, commandCtx commandContext, args []string) int {
 	fs := flag.NewFlagSet("run9 box create", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	shape := fs.String("shape", "", "desired shape")
+	shape := fs.String("shape", defaultBoxShape, "desired shape")
 	name := fs.String("name", "", "box name")
 	sourceSnapID := fs.String("snap", "", "source snap id")
 	sourceImage := fs.String("image", "", "source image ref")
 	sourceImageRef := fs.String("image-ref", "", "source image ref")
 	var labels stringList
 	fs.Var(&labels, "label", "box label in key=value form")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagsInterspersed(fs, args); err != nil {
 		fmt.Fprintln(commandCtx.stderr, err)
 		return 1
 	}
-	if fs.NArg() != 0 {
+	if fs.NArg() > 1 {
 		fmt.Fprintf(commandCtx.stderr, "unexpected args: %v\n", fs.Args())
 		return 1
 	}
-	if strings.TrimSpace(*shape) == "" {
-		fmt.Fprintln(commandCtx.stderr, "missing --shape")
-		return 1
+
+	boxID := ""
+	if fs.NArg() == 1 {
+		boxID = strings.TrimSpace(fs.Arg(0))
 	}
 
 	labelMap, err := parseKeyValueMap(labels)
@@ -259,6 +264,9 @@ func runBoxCreate(ctx context.Context, commandCtx commandContext, args []string)
 	}
 
 	hasSnap := strings.TrimSpace(*sourceSnapID) != ""
+	if !hasSnap && imageRef == "" {
+		imageRef = defaultBoxImageRef
+	}
 	hasImage := imageRef != ""
 	if hasSnap == hasImage {
 		fmt.Fprintln(commandCtx.stderr, "exactly one of --snap or --image is required")
@@ -271,6 +279,7 @@ func runBoxCreate(ctx context.Context, commandCtx commandContext, args []string)
 		return 1
 	}
 	view, err := client.CreateBox(ctx, creds, api.CreateBoxRequest{
+		BoxID:          boxID,
 		DesiredShape:   strings.TrimSpace(*shape),
 		Name:           strings.TrimSpace(*name),
 		Labels:         labelMap,
@@ -350,12 +359,17 @@ func runBoxExec(ctx context.Context, commandCtx commandContext, args []string) i
 	workdir := fs.String("workdir", "", "exec workdir")
 	var envVars stringList
 	fs.Var(&envVars, "e", "environment override in KEY=VALUE form")
-	if err := parseFlagsInterspersed(fs, args); err != nil {
+	flagArgs, boxID, command, err := splitBoxExecArgs(args)
+	if err != nil {
 		fmt.Fprintln(commandCtx.stderr, err)
 		return 1
 	}
-	if fs.NArg() < 2 {
-		fmt.Fprintln(commandCtx.stderr, "usage: run9 box exec <box-id> [--deadline=15m] [--user=...] [--workdir=...] [-e KEY=VALUE] -- <command...>")
+	if err := fs.Parse(flagArgs); err != nil {
+		fmt.Fprintln(commandCtx.stderr, err)
+		return 1
+	}
+	if strings.TrimSpace(boxID) == "" || len(command) == 0 {
+		fmt.Fprintln(commandCtx.stderr, "usage: run9 box exec <box-id> [--deadline=15m] [--user=...] [--workdir=...] [-e KEY=VALUE] <command...>")
 		return 1
 	}
 
@@ -364,9 +378,6 @@ func runBoxExec(ctx context.Context, commandCtx commandContext, args []string) i
 		fmt.Fprintln(commandCtx.stderr, err)
 		return 1
 	}
-
-	boxID := fs.Arg(0)
-	command := append([]string(nil), fs.Args()[1:]...)
 
 	_, client, creds, err := loadAuthenticatedClient(commandCtx.configPath)
 	if err != nil {
@@ -803,4 +814,59 @@ func isBoolFlag(f *flag.Flag) bool {
 	}
 	bf, ok := f.Value.(boolFlag)
 	return ok && bf.IsBoolFlag()
+}
+
+func splitBoxExecArgs(args []string) ([]string, string, []string, error) {
+	flagArgs := make([]string, 0, len(args))
+	boxID := ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			if boxID == "" {
+				return nil, "", nil, errors.New("usage: run9 box exec <box-id> [--deadline=15m] [--user=...] [--workdir=...] [-e KEY=VALUE] <command...>")
+			}
+			return flagArgs, boxID, append([]string(nil), args[i+1:]...), nil
+		}
+		if boxID == "" {
+			if isBoxExecFlagToken(arg) {
+				flagArgs = append(flagArgs, arg)
+				if boxExecFlagNeedsValue(arg) && i+1 < len(args) {
+					flagArgs = append(flagArgs, args[i+1])
+					i++
+				}
+				continue
+			}
+			boxID = strings.TrimSpace(arg)
+			continue
+		}
+		if isBoxExecFlagToken(arg) {
+			flagArgs = append(flagArgs, arg)
+			if boxExecFlagNeedsValue(arg) && i+1 < len(args) {
+				flagArgs = append(flagArgs, args[i+1])
+				i++
+			}
+			continue
+		}
+		return flagArgs, boxID, append([]string(nil), args[i:]...), nil
+	}
+	return flagArgs, boxID, nil, nil
+}
+
+func isBoxExecFlagToken(arg string) bool {
+	switch {
+	case arg == "-e":
+		return true
+	case arg == "--deadline", strings.HasPrefix(arg, "--deadline="):
+		return true
+	case arg == "--user", strings.HasPrefix(arg, "--user="):
+		return true
+	case arg == "--workdir", strings.HasPrefix(arg, "--workdir="):
+		return true
+	default:
+		return false
+	}
+}
+
+func boxExecFlagNeedsValue(arg string) bool {
+	return !strings.Contains(arg, "=")
 }

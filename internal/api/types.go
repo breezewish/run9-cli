@@ -70,6 +70,7 @@ type RuntimeRequestView struct {
 }
 
 type CreateBoxRequest struct {
+	BoxID          string            `json:"box_id,omitempty"`
 	DesiredShape   string            `json:"desired_shape"`
 	Name           string            `json:"name,omitempty"`
 	Labels         map[string]string `json:"labels,omitempty"`
