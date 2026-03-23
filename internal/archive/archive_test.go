@@ -88,6 +88,78 @@ func TestExtractDownloadArchiveWritesSingleFileToExactDestination(t *testing.T) 
 	require.Equal(t, "hello", string(data))
 }
 
+func TestExtractDownloadArchiveMergesIntoExistingDirectory(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "project/",
+		Mode:     0o755,
+		Typeflag: tar.TypeDir,
+	}))
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "project/root.txt",
+		Mode:     0o644,
+		Size:     4,
+		Typeflag: tar.TypeReg,
+	}))
+	_, err := tw.Write([]byte("root"))
+	require.NoError(t, err)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "project/nested/",
+		Mode:     0o755,
+		Typeflag: tar.TypeDir,
+	}))
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "project/nested/child.txt",
+		Mode:     0o644,
+		Size:     5,
+		Typeflag: tar.TypeReg,
+	}))
+	_, err = tw.Write([]byte("child"))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+
+	destination := filepath.Join(t.TempDir(), "download")
+	require.NoError(t, os.MkdirAll(destination, 0o755))
+	require.NoError(t, ExtractDownloadArchive(bytes.NewReader(buf.Bytes()), destination))
+
+	rootData, err := os.ReadFile(filepath.Join(destination, "project", "root.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "root", string(rootData))
+
+	childData, err := os.ReadFile(filepath.Join(destination, "project", "nested", "child.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "child", string(childData))
+}
+
+func TestExtractDownloadArchiveRejectsMultiEntryArchiveForFileDestination(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "first.txt",
+		Mode:     0o644,
+		Size:     5,
+		Typeflag: tar.TypeReg,
+	}))
+	_, err := tw.Write([]byte("first"))
+	require.NoError(t, err)
+	require.NoError(t, tw.WriteHeader(&tar.Header{
+		Name:     "second.txt",
+		Mode:     0o644,
+		Size:     6,
+		Typeflag: tar.TypeReg,
+	}))
+	_, err = tw.Write([]byte("second"))
+	require.NoError(t, err)
+	require.NoError(t, tw.Close())
+
+	destination := filepath.Join(t.TempDir(), "download.txt")
+	require.NoError(t, os.WriteFile(destination, []byte("existing"), 0o644))
+
+	err = ExtractDownloadArchive(bytes.NewReader(buf.Bytes()), destination)
+	require.EqualError(t, err, "download archive is not a single file, local destination must be a directory")
+}
+
 func TestExtractDownloadArchiveRejectsInvalidArchivePath(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)

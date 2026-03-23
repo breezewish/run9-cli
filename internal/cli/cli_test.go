@@ -460,6 +460,37 @@ func TestMainBoxCopyRejectsTwoLocalPaths(t *testing.T) {
 	require.Contains(t, stderr.String(), "exactly one side of box cp must be")
 }
 
+func TestMainBoxCopyRejectsTwoBoxPaths(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"box", "cp", "box-1:/work/a.txt", "box-2:/work/b.txt",
+	}, stdout, stderr)
+	require.Equal(t, 1, exitCode)
+	require.Empty(t, stdout.String())
+	require.Contains(t, stderr.String(), "exactly one side of box cp must be")
+}
+
+func TestMainWhoAmIReturnsNotLoggedInForIncompleteConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "cli.toml")
+	require.NoError(t, config.Save(configPath, config.File{
+		Endpoint: "http://example.invalid",
+		AK:       "ak-1",
+	}))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"auth", "whoami",
+	}, stdout, stderr)
+	require.Equal(t, 1, exitCode)
+	require.Empty(t, stdout.String())
+	require.Equal(t, "not logged in\n", stderr.String())
+}
+
 func TestMainBoxListUsesFilters(t *testing.T) {
 	configPath := writeLoggedInConfig(t, "http://example.invalid")
 
@@ -488,6 +519,31 @@ func TestMainBoxListUsesFilters(t *testing.T) {
 	require.Equal(t, 0, exitCode)
 	require.Empty(t, stderr.String())
 	require.JSONEq(t, "[]", stdout.String())
+}
+
+func TestMainBoxListPrintsJSONErrorMessage(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/boxes", r.URL.Path)
+		writeJSONResponse(t, w, http.StatusBadRequest, map[string]string{
+			"error": "invalid state filter",
+		})
+	}))
+	defer server.Close()
+
+	require.NoError(t, updateEndpoint(configPath, server.URL))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"box", "ls",
+		"--state", "broken",
+	}, stdout, stderr)
+	require.Equal(t, 1, exitCode)
+	require.Empty(t, stdout.String())
+	require.Equal(t, "invalid state filter\n", stderr.String())
 }
 
 func TestMainBoxCreateSupportsPositionalBoxIDAndDefaults(t *testing.T) {
@@ -722,6 +778,30 @@ func TestMainSnapListRejectsInvalidAttachedFilter(t *testing.T) {
 	require.Equal(t, 1, exitCode)
 	require.Empty(t, stdout.String())
 	require.Contains(t, stderr.String(), "--attached must be true or false")
+}
+
+func TestMainBoxExecPrintsStreamJSONErrorMessage(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/boxes/box-1/execs/stream", r.URL.Path)
+		writeJSONResponse(t, w, http.StatusConflict, map[string]string{
+			"error": "box is stopped",
+		})
+	}))
+	defer server.Close()
+
+	require.NoError(t, updateEndpoint(configPath, server.URL))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"box", "exec", "box-1", "/bin/true",
+	}, stdout, stderr)
+	require.Equal(t, 1, exitCode)
+	require.Empty(t, stdout.String())
+	require.Equal(t, "box is stopped\n", stderr.String())
 }
 
 func TestStreamExecReturnsCancelledReason(t *testing.T) {
