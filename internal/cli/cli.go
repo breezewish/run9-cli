@@ -229,7 +229,7 @@ func runBoxCreate(ctx context.Context, commandCtx commandContext, args []string)
 	fs := flag.NewFlagSet("run9 box create", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	shape := fs.String("shape", defaultBoxShape, "desired shape")
-	name := fs.String("name", "", "box name")
+	description := fs.String("description", "", "box description")
 	sourceSnapID := fs.String("snap", "", "source snap id")
 	sourceImage := fs.String("image", "", "source image ref")
 	sourceImageRef := fs.String("image-ref", "", "source image ref")
@@ -281,7 +281,7 @@ func runBoxCreate(ctx context.Context, commandCtx commandContext, args []string)
 	view, err := client.CreateBox(ctx, creds, api.CreateBoxRequest{
 		BoxID:          boxID,
 		DesiredShape:   strings.TrimSpace(*shape),
-		Name:           strings.TrimSpace(*name),
+		Description:    strings.TrimSpace(*description),
 		Labels:         labelMap,
 		SourceSnapID:   strings.TrimSpace(*sourceSnapID),
 		SourceImageRef: imageRef,

@@ -585,6 +585,44 @@ func TestMainBoxCreateSupportsPositionalBoxIDAndDefaults(t *testing.T) {
 	require.Equal(t, defaultBoxShape, view.DesiredShape)
 }
 
+func TestMainBoxCreateAllowsGeneratedBoxIDWhenPositionalIsOmitted(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/boxes", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+
+		var req api.CreateBoxRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.Empty(t, req.BoxID)
+		require.Equal(t, defaultBoxShape, req.DesiredShape)
+		require.Equal(t, defaultBoxImageRef, req.SourceImageRef)
+
+		writeJSONResponse(t, w, http.StatusCreated, api.BoxView{
+			BoxID:        "calm-forest",
+			DesiredShape: defaultBoxShape,
+			State:        api.BoxState("ready"),
+		})
+	}))
+	defer server.Close()
+
+	require.NoError(t, updateEndpoint(configPath, server.URL))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{
+		"--config", configPath,
+		"box", "create",
+	}, stdout, stderr)
+	require.Equal(t, 0, exitCode)
+	require.Empty(t, stderr.String())
+
+	var view api.BoxView
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &view))
+	require.Equal(t, "calm-forest", view.BoxID)
+	require.Equal(t, defaultBoxShape, view.DesiredShape)
+}
+
 func TestMainBoxCreateSupportsPositionalBoxIDWithExplicitShapeAndImage(t *testing.T) {
 	configPath := writeLoggedInConfig(t, "http://example.invalid")
 
@@ -678,7 +716,7 @@ func TestMainBoxCreateRejectsMismatchedImageAliases(t *testing.T) {
 	require.Contains(t, stderr.String(), "--image and --image-ref must match")
 }
 
-func TestMainBoxCreateSendsNameAndLabels(t *testing.T) {
+func TestMainBoxCreateSendsDescriptionAndLabels(t *testing.T) {
 	configPath := writeLoggedInConfig(t, "http://example.invalid")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -688,7 +726,7 @@ func TestMainBoxCreateSendsNameAndLabels(t *testing.T) {
 		var req api.CreateBoxRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		require.Equal(t, "named-box", req.BoxID)
-		require.Equal(t, "Demo Box", req.Name)
+		require.Equal(t, "Demo Box", req.Description)
 		require.Equal(t, "snap-1", req.SourceSnapID)
 		require.Equal(t, map[string]string{
 			"env":  "prod",
@@ -698,7 +736,7 @@ func TestMainBoxCreateSendsNameAndLabels(t *testing.T) {
 		writeJSONResponse(t, w, http.StatusCreated, api.BoxView{
 			BoxID:        "named-box",
 			DesiredShape: defaultBoxShape,
-			Name:         "Demo Box",
+			Description:  "Demo Box",
 			Labels: map[string]string{
 				"env":  "prod",
 				"team": "portal",
@@ -716,7 +754,7 @@ func TestMainBoxCreateSendsNameAndLabels(t *testing.T) {
 		"--config", configPath,
 		"box", "create", "named-box",
 		"--snap", "snap-1",
-		"--name", "Demo Box",
+		"--description", "Demo Box",
 		"--label", "team=portal",
 		"--label", "env=prod",
 	}, stdout, stderr)
@@ -726,7 +764,7 @@ func TestMainBoxCreateSendsNameAndLabels(t *testing.T) {
 	var view api.BoxView
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &view))
 	require.Equal(t, "named-box", view.BoxID)
-	require.Equal(t, "Demo Box", view.Name)
+	require.Equal(t, "Demo Box", view.Description)
 	require.Equal(t, "portal", view.Labels["team"])
 	require.Equal(t, "prod", view.Labels["env"])
 }

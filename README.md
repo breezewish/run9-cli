@@ -22,9 +22,11 @@ go build -o ./bin/run9 ./cmd/run9
 ```bash
 ./bin/run9 snap import public.ecr.aws/docker/library/alpine:3.20
 
+./bin/run9 box create
+
 ./bin/run9 box create my-box
 
-./bin/run9 box create my-box --shape 2c4g --image public.ecr.aws/docker/library/alpine:3.20
+./bin/run9 box create my-box --description "My workspace" --shape 2c4g --image public.ecr.aws/docker/library/alpine:3.20
 
 ./bin/run9 box exec my-box /bin/sh -lc 'echo hello'
 
@@ -36,5 +38,7 @@ go build -o ./bin/run9 ./cmd/run9
 
 说明：
 
+- `run9 box create` 可省略位置参数 `box_id`，由服务端自动分配 org 内唯一的 `{word}-{word}` 标识
 - `run9 box create my-box` 默认使用 `1c2g`，且在未显式传 `--snap` / `--image` 时默认使用 `public.ecr.aws/docker/library/alpine:3.20`
+- box 不再有 name；可选展示文本统一使用 `--description`
 - `run9 box exec my-box <command...>` 不要求强制插入 `--`

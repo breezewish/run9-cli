@@ -37,7 +37,7 @@ type BoxView struct {
 	OrgID               string            `json:"org_id"`
 	Creator             string            `json:"creator"`
 	CreatedAt           time.Time         `json:"created_at"`
-	Name                string            `json:"name,omitempty"`
+	Description         string            `json:"description,omitempty"`
 	Labels              map[string]string `json:"labels,omitempty"`
 	State               BoxState          `json:"state"`
 	Reason              string            `json:"reason,omitempty"`
@@ -72,7 +72,7 @@ type RuntimeRequestView struct {
 type CreateBoxRequest struct {
 	BoxID          string            `json:"box_id,omitempty"`
 	DesiredShape   string            `json:"desired_shape"`
-	Name           string            `json:"name,omitempty"`
+	Description    string            `json:"description,omitempty"`
 	Labels         map[string]string `json:"labels,omitempty"`
 	SourceSnapID   string            `json:"source_snap_id,omitempty"`
 	SourceImageRef string            `json:"source_image_ref,omitempty"`
