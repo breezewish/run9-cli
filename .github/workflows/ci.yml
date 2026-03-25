@@ -25,3 +25,62 @@ jobs:
 
       - name: Run go test
         run: go test ./...
+
+  package-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build release artifacts
+        run: ./scripts/build-release-artifacts.sh 0.0.0-dev
+
+      - name: Stage npm package
+        run: ./scripts/stage-npm-package.sh 0.0.0-dev
+
+      - name: Smoke test npm global install
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          prefix_dir="${RUNNER_TEMP}/run9-npm-global"
+          rm -rf "${prefix_dir}"
+          npm install -g --prefix "${prefix_dir}" dist/npm/run9-cli-npm-0.0.0-dev.tgz
+
+          stderr_file="${RUNNER_TEMP}/run9-npm-stderr.txt"
+          set +e
+          PATH="${prefix_dir}/bin:${PATH}" run9 > /dev/null 2> "${stderr_file}"
+          status=$?
+          set -e
+          [[ "${status}" -eq 1 ]] || { echo "expected run9 to exit 1 without args, got ${status}"; exit 1; }
+          grep -F "missing command (expected: auth|box|snap)" "${stderr_file}"
+
+      - name: Smoke test bun global install
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export BUN_INSTALL="${RUNNER_TEMP}/run9-bun-global"
+          rm -rf "${BUN_INSTALL}"
+          bun install -g --no-save "file://${GITHUB_WORKSPACE}/dist/npm/run9-cli-npm-0.0.0-dev.tgz"
+
+          stderr_file="${RUNNER_TEMP}/run9-bun-stderr.txt"
+          set +e
+          PATH="${BUN_INSTALL}/bin:${PATH}" run9 > /dev/null 2> "${stderr_file}"
+          status=$?
+          set -e
+          [[ "${status}" -eq 1 ]] || { echo "expected run9 to exit 1 without args, got ${status}"; exit 1; }
+          grep -F "missing command (expected: auth|box|snap)" "${stderr_file}"

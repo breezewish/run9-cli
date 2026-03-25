@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tag-check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate tag and extract version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
+            || { echo "❌ Not a tag push"; exit 1; }
+          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+            || { echo "❌ Tag '${GITHUB_REF_NAME}' doesn't look like a semver tag (vX.Y.Z)"; exit 1; }
+
+          tag_ver="${GITHUB_REF_NAME#v}"
+          echo "✅ Tag looks valid (${tag_ver})"
+          echo "version=${tag_ver}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    needs: tag-check
+    name: Build - ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+          - target: aarch64-unknown-linux-musl
+          - target: x86_64-apple-darwin
+          - target: aarch64-apple-darwin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build release artifact
+        run: ./scripts/build-release-artifacts.sh "${{ needs.tag-check.outputs.version }}" "${{ matrix.target }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/${{ matrix.target }}
+
+  release:
+    needs:
+      - tag-check
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (pack + publish)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Stage npm package
+        run: ./scripts/stage-npm-package.sh "${{ needs.tag-check.outputs.version }}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ needs.tag-check.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ contains(needs.tag-check.outputs.version, '-') }}
+          files: |
+            dist/**/run9-${{ needs.tag-check.outputs.version }}-*.tar.gz
+            dist/npm/run9-cli-npm-${{ needs.tag-check.outputs.version }}.tgz
+
+      - name: Publish to npm
+        shell: bash
+        env:
+          VERSION: ${{ needs.tag-check.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          tag_args=()
+          if [[ "${VERSION}" == *-alpha.* ]]; then
+            tag_args+=(--tag alpha)
+          elif [[ "${VERSION}" == *-beta.* ]]; then
+            tag_args+=(--tag beta)
+          elif [[ "${VERSION}" == *-* ]]; then
+            tag_args+=(--tag next)
+          fi
+
+          npm publish "dist/npm/run9-cli-npm-${VERSION}.tgz" --access public "${tag_args[@]}"

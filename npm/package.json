@@ -1,0 +1,26 @@
+{
+  "name": "@breezewish/run9-cli",
+  "version": "0.0.0-dev",
+  "description": "run9 CLI with bundled native binaries for Linux and macOS",
+  "license": "MIT",
+  "bin": {
+    "run9": "bin/run9.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "bin",
+    "vendor",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/breezewish/run9-cli.git",
+    "directory": "npm"
+  }
+}
