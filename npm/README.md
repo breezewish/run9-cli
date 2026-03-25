@@ -18,15 +18,3 @@ run9 auth login \
   --ak ak-... \
   --sk sk-...
 ```
-
-Supported platforms (via bundled native binaries):
-
-- macOS: Apple Silicon + Intel
-- Linux: x86_64 + arm64
-
-Build from source:
-
-```sh
-go build -o ./bin/run9 ./cmd/run9
-./bin/run9
-```

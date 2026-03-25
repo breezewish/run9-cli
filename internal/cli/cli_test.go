@@ -15,9 +15,59 @@ import (
 	"time"
 
 	"github.com/breezewish/run9-cli/internal/api"
+	"github.com/breezewish/run9-cli/internal/buildinfo"
 	"github.com/breezewish/run9-cli/internal/config"
 	"github.com/stretchr/testify/require"
 )
+
+func TestMainVersionFlagPrintsEmbeddedVersion(t *testing.T) {
+	previousVersion := buildinfo.Version
+	buildinfo.Version = "1.2.3"
+	t.Cleanup(func() {
+		buildinfo.Version = previousVersion
+	})
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{"--version"}, stdout, stderr)
+	require.Equal(t, 0, exitCode)
+	require.Equal(t, "run9 version 1.2.3\n", stdout.String())
+	require.Empty(t, stderr.String())
+}
+
+func TestMainVersionCommandPrintsEmbeddedVersion(t *testing.T) {
+	previousVersion := buildinfo.Version
+	buildinfo.Version = "2.0.0-beta.1"
+	t.Cleanup(func() {
+		buildinfo.Version = previousVersion
+	})
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{"version"}, stdout, stderr)
+	require.Equal(t, 0, exitCode)
+	require.Equal(t, "run9 version 2.0.0-beta.1\n", stdout.String())
+	require.Empty(t, stderr.String())
+}
+
+func TestMainCompletionZshOutputsScript(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{"completion", "zsh"}, stdout, stderr)
+	require.Equal(t, 0, exitCode)
+	require.Empty(t, stderr.String())
+	require.Contains(t, stdout.String(), "#compdef run9")
+}
+
+func TestMainBoxExecHelp(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := Main(context.Background(), []string{"box", "exec", "--help"}, stdout, stderr)
+	require.Equal(t, 0, exitCode)
+	require.Empty(t, stderr.String())
+	require.Contains(t, stdout.String(), "run9 box exec <box-id>")
+	require.Contains(t, stdout.String(), "Stream one remote exec through portal-api")
+}
 
 func TestMainAuthLoginWhoAmIAndLogout(t *testing.T) {
 	fixtureTime := time.Unix(1_700_000_000, 0).UTC()

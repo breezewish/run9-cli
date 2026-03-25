@@ -31,8 +31,9 @@ for target in "${targets[@]}"; do
   rm -rf "${target_dir}"
   mkdir -p "${target_dir}"
 
+  ldflags="-s -w -X github.com/breezewish/run9-cli/internal/buildinfo.Version=${version}"
   CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" \
-    go build -trimpath -ldflags="-s -w" -o "${target_dir}/run9" ./cmd/run9
+    go build -trimpath -ldflags="${ldflags}" -o "${target_dir}/run9" ./cmd/run9
 
   chmod +x "${target_dir}/run9"
   tar -C "${target_dir}" -czf "${target_dir}/run9-${version}-${target}.tar.gz" run9

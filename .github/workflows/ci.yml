@@ -60,13 +60,13 @@ jobs:
           rm -rf "${prefix_dir}"
           npm install -g --prefix "${prefix_dir}" dist/npm/run9-cli-npm-0.0.0-dev.tgz
 
-          stderr_file="${RUNNER_TEMP}/run9-npm-stderr.txt"
-          set +e
-          PATH="${prefix_dir}/bin:${PATH}" run9 > /dev/null 2> "${stderr_file}"
-          status=$?
-          set -e
-          [[ "${status}" -eq 1 ]] || { echo "expected run9 to exit 1 without args, got ${status}"; exit 1; }
-          grep -F "missing command (expected: auth|box|snap)" "${stderr_file}"
+          version_output="$(PATH="${prefix_dir}/bin:${PATH}" run9 --version)"
+          [[ "${version_output}" == "run9 version 0.0.0-dev" ]] \
+            || { echo "unexpected npm-installed version output: ${version_output}"; exit 1; }
+
+          completion_file="${RUNNER_TEMP}/run9-npm-completion.zsh"
+          PATH="${prefix_dir}/bin:${PATH}" run9 completion zsh > "${completion_file}"
+          grep -F "#compdef run9" "${completion_file}"
 
       - name: Smoke test bun global install
         shell: bash
@@ -77,10 +77,10 @@ jobs:
           rm -rf "${BUN_INSTALL}"
           bun install -g --no-save "file://${GITHUB_WORKSPACE}/dist/npm/run9-cli-npm-0.0.0-dev.tgz"
 
-          stderr_file="${RUNNER_TEMP}/run9-bun-stderr.txt"
-          set +e
-          PATH="${BUN_INSTALL}/bin:${PATH}" run9 > /dev/null 2> "${stderr_file}"
-          status=$?
-          set -e
-          [[ "${status}" -eq 1 ]] || { echo "expected run9 to exit 1 without args, got ${status}"; exit 1; }
-          grep -F "missing command (expected: auth|box|snap)" "${stderr_file}"
+          version_output="$(PATH="${BUN_INSTALL}/bin:${PATH}" run9 --version)"
+          [[ "${version_output}" == "run9 version 0.0.0-dev" ]] \
+            || { echo "unexpected bun-installed version output: ${version_output}"; exit 1; }
+
+          completion_file="${RUNNER_TEMP}/run9-bun-completion.bash"
+          PATH="${BUN_INSTALL}/bin:${PATH}" run9 completion bash > "${completion_file}"
+          grep -F "complete -o default -F __start_run9 run9" "${completion_file}"
