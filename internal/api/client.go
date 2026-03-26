@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/go-resty/resty/v2"
 )
@@ -48,10 +47,11 @@ type Client struct {
 func NewClient(endpoint string) *Client {
 	baseURL := strings.TrimRight(strings.TrimSpace(endpoint), "/")
 	return &Client{
+		// Long-running control requests and streams must be bounded by caller contexts,
+		// not by a shorter transport timeout inside the shared HTTP client.
 		http: resty.New().
 			SetBaseURL(baseURL).
 			SetDisableWarn(true).
-			SetTimeout(30*time.Second).
 			SetHeader("Accept", "application/json"),
 	}
 }

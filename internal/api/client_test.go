@@ -15,6 +15,7 @@ func TestNewClientDisablesRestyWarnings(t *testing.T) {
 
 	require.Equal(t, "http://example.com", client.http.BaseURL)
 	require.True(t, client.http.DisableWarn)
+	require.Zero(t, client.http.GetClient().Timeout)
 }
 
 func TestClientBoxesReturnsJSONErrorMessage(t *testing.T) {
