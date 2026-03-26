@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/breezewish/run9-cli/internal/buildinfo"
 	"github.com/breezewish/run9-cli/internal/config"
@@ -13,8 +14,12 @@ import (
 
 type app struct {
 	configPath string
+	stdin      io.Reader
 	stdout     io.Writer
 	stderr     io.Writer
+	stdinFile  *os.File
+	stdoutFile *os.File
+	stderrFile *os.File
 }
 
 type cliError struct {
@@ -36,8 +41,12 @@ func Main(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer
 
 	cliApp := &app{
 		configPath: config.DefaultPath(),
+		stdin:      os.Stdin,
 		stdout:     stdout,
 		stderr:     stderr,
+		stdinFile:  os.Stdin,
+		stdoutFile: os.Stdout,
+		stderrFile: os.Stderr,
 	}
 
 	rootCmd := cliApp.newRootCommand()

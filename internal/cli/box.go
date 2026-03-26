@@ -19,10 +19,12 @@ const (
 )
 
 type execOptions struct {
-	deadline time.Duration
-	user     string
-	workdir  string
-	envVars  stringList
+	deadline     time.Duration
+	user         string
+	workdir      string
+	envVars      stringList
+	stdinEnabled bool
+	tty          bool
 }
 
 func (a *app) newBoxCommand() *cobra.Command {
@@ -192,10 +194,10 @@ func (a *app) newBoxInspectCommand() *cobra.Command {
 
 func (a *app) newBoxExecCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:                "exec <box-id> [--deadline=15m] [--user=...] [--workdir=...] [-e KEY=VALUE] <command...>",
+		Use:                "exec <box-id> [--deadline=15m] [--user=...] [--workdir=...] [-e KEY=VALUE] [-i] [-t] <command...>",
 		Short:              "Run one command inside a box",
-		Long:               "Stream one remote exec through portal-api. The CLI accepts local exec flags before the remote command and preserves the remote exit code.",
-		Example:            "  run9 box exec my-box /bin/sh -lc 'echo hello'\n  run9 box exec my-box --user root --workdir /workspace /bin/true\n  run9 box exec my-box -- --user remote-flag-value",
+		Long:               "Stream one remote exec through portal-api. The CLI accepts local exec flags before the remote command, preserves the remote exit code, and uses websocket attach for interactive stdin or TTY sessions.",
+		Example:            "  run9 box exec my-box /bin/sh -lc 'echo hello'\n  run9 box exec my-box -it /bin/sh\n  run9 box exec my-box --user root --workdir /workspace /bin/true\n  run9 box exec my-box -- --user remote-flag-value",
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 1 && isHelpToken(args[0]) {
@@ -212,7 +214,7 @@ func (a *app) newBoxExecCommand() *cobra.Command {
 				return usageError(cmd, "%v", err)
 			}
 			if strings.TrimSpace(boxID) == "" || len(command) == 0 {
-				return usageError(cmd, "usage: %s <box-id> [--deadline=15m] [--user=...] [--workdir=...] [-e KEY=VALUE] <command...>", cmd.CommandPath())
+				return usageError(cmd, "usage: %s <box-id> [--deadline=15m] [--user=...] [--workdir=...] [-e KEY=VALUE] [-i] [-t] <command...>", cmd.CommandPath())
 			}
 
 			envMap, err := parseKeyValueMap(options.envVars)
@@ -225,13 +227,20 @@ func (a *app) newBoxExecCommand() *cobra.Command {
 				return commandErrorf("%v", err)
 			}
 
-			_, body, err := client.ExecStream(cmd.Context(), creds, boxID, api.ExecBoxRequest{
+			req := api.ExecBoxRequest{
 				DeadlineAt:   time.Now().Add(options.deadline),
 				Command:      command,
 				EnvOverrides: envMap,
 				User:         strings.TrimSpace(options.user),
 				Workdir:      strings.TrimSpace(options.workdir),
-			})
+				StdinEnabled: options.stdinEnabled,
+				TTY:          options.tty,
+			}
+			if options.stdinEnabled || options.tty {
+				return a.runInteractiveExec(cmd.Context(), client, creds, boxID, req)
+			}
+
+			_, body, err := client.ExecStream(cmd.Context(), creds, boxID, req)
 			if err != nil {
 				return commandErrorf("%v", err)
 			}
@@ -396,6 +405,8 @@ func parseExecOptions(args []string) (execOptions, error) {
 	fs := pflag.NewFlagSet("run9 box exec", pflag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.DurationVar(&options.deadline, "deadline", defaultExecDeadline, "exec deadline")
+	fs.BoolVarP(&options.stdinEnabled, "interactive", "i", false, "keep stdin open")
+	fs.BoolVarP(&options.tty, "tty", "t", false, "allocate a TTY")
 	fs.StringVar(&options.user, "user", "", "exec user")
 	fs.StringVar(&options.workdir, "workdir", "", "exec workdir")
 	fs.VarP(&options.envVars, "env", "e", "environment override in KEY=VALUE form")

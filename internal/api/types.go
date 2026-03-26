@@ -69,6 +69,26 @@ type RuntimeRequestView struct {
 	HostID           string `json:"host_id,omitempty"`
 }
 
+type ExecView struct {
+	ExecID         string         `json:"exec_id"`
+	BoxID          string         `json:"box_id"`
+	OrgID          string         `json:"org_id"`
+	Creator        string         `json:"creator"`
+	AcceptedAt     time.Time      `json:"accepted_at"`
+	CommandSummary string         `json:"command_summary"`
+	ShapeSnapshot  string         `json:"shape_snapshot"`
+	State          string         `json:"state"`
+	ExitCode       *int           `json:"exit_code,omitempty"`
+	OutputSummary  string         `json:"output_summary,omitempty"`
+	Reason         string         `json:"reason,omitempty"`
+	Diagnostics    map[string]any `json:"diagnostics,omitempty"`
+}
+
+type TTYSize struct {
+	Rows uint32 `json:"rows,omitempty"`
+	Cols uint32 `json:"cols,omitempty"`
+}
+
 type CreateBoxRequest struct {
 	BoxID          string            `json:"box_id,omitempty"`
 	DesiredShape   string            `json:"desired_shape"`
@@ -88,6 +108,9 @@ type ExecBoxRequest struct {
 	EnvOverrides map[string]string `json:"env_overrides,omitempty"`
 	User         string            `json:"user,omitempty"`
 	Workdir      string            `json:"workdir,omitempty"`
+	StdinEnabled bool              `json:"stdin_enabled,omitempty"`
+	TTY          bool              `json:"tty,omitempty"`
+	TTYSize      *TTYSize          `json:"tty_size,omitempty"`
 }
 
 type ExecStreamEvent struct {
@@ -96,4 +119,11 @@ type ExecStreamEvent struct {
 	ExitCode      int32  `json:"exit_code,omitempty"`
 	FailureReason string `json:"failure_reason,omitempty"`
 	CancelReason  string `json:"cancel_reason,omitempty"`
+}
+
+type ExecAttachInput struct {
+	Type string `json:"type"`
+	Data []byte `json:"data,omitempty"`
+	Rows uint32 `json:"rows,omitempty"`
+	Cols uint32 `json:"cols,omitempty"`
 }

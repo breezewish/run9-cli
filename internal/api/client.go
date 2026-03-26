@@ -155,6 +155,12 @@ func (c *Client) ExecStream(ctx context.Context, creds Credentials, boxID string
 	return strings.TrimSpace(resp.Header().Get("X-Run9-Exec-ID")), resp.RawBody(), nil
 }
 
+func (c *Client) Exec(ctx context.Context, creds Credentials, boxID string, req ExecBoxRequest) (ExecView, error) {
+	var view ExecView
+	err := c.doJSON(ctx, http.MethodPost, "/boxes/"+url.PathEscape(strings.TrimSpace(boxID))+"/execs", creds, nil, req, &view)
+	return view, err
+}
+
 func (c *Client) UploadArchive(ctx context.Context, creds Credentials, boxID string, boxAbsPath string, source io.Reader) (RuntimeRequestView, error) {
 	var view RuntimeRequestView
 	err := c.doStreamJSON(

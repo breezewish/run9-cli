@@ -163,7 +163,7 @@ func splitBoxExecArgs(args []string) ([]string, string, []string, error) {
 		arg := args[i]
 		if arg == "--" {
 			if boxID == "" {
-				return nil, "", nil, errors.New("usage: run9 box exec <box-id> [--deadline=15m] [--user=...] [--workdir=...] [-e KEY=VALUE] <command...>")
+				return nil, "", nil, errors.New("usage: run9 box exec <box-id> [--deadline=15m] [--user=...] [--workdir=...] [-e KEY=VALUE] [-i] [-t] <command...>")
 			}
 			return flagArgs, boxID, append([]string(nil), args[i+1:]...), nil
 		}
@@ -203,7 +203,13 @@ func isBoxExecFlagToken(arg string) bool {
 	switch {
 	case arg == "-e":
 		return true
+	case arg == "-i", arg == "-t", arg == "-it", arg == "-ti":
+		return true
 	case arg == "--deadline", strings.HasPrefix(arg, "--deadline="):
+		return true
+	case arg == "--interactive", strings.HasPrefix(arg, "--interactive="):
+		return true
+	case arg == "--tty", strings.HasPrefix(arg, "--tty="):
 		return true
 	case arg == "--user", strings.HasPrefix(arg, "--user="):
 		return true
@@ -215,6 +221,10 @@ func isBoxExecFlagToken(arg string) bool {
 }
 
 func boxExecFlagNeedsValue(arg string) bool {
+	switch arg {
+	case "-i", "-t", "-it", "-ti", "--interactive", "--tty":
+		return false
+	}
 	return !strings.Contains(arg, "=")
 }
 

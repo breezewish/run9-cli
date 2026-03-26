@@ -17,6 +17,7 @@ import (
 	"github.com/breezewish/run9-cli/internal/api"
 	"github.com/breezewish/run9-cli/internal/buildinfo"
 	"github.com/breezewish/run9-cli/internal/config"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
 
@@ -349,6 +350,85 @@ func TestMainBoxExecSendsDeadlineWorkdirAndEnvOverrides(t *testing.T) {
 	require.WithinDuration(t, before.Add(2*time.Minute), req.DeadlineAt, 10*time.Second)
 }
 
+func TestMainBoxExecInteractiveUsesExecAttach(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/boxes/box-1/execs":
+			var req api.ExecBoxRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			require.True(t, req.StdinEnabled)
+			require.False(t, req.TTY)
+			require.Equal(t, []string{"cat"}, req.Command)
+			writeJSONResponse(t, w, http.StatusCreated, api.ExecView{ExecID: "exec-1"})
+		case "/execs/exec-1/attach":
+			require.NotEmpty(t, r.Header.Get("Authorization"))
+			conn, err := upgrader.Upgrade(w, r, nil)
+			require.NoError(t, err)
+			defer conn.Close()
+
+			var input api.ExecAttachInput
+			require.NoError(t, conn.ReadJSON(&input))
+			require.Equal(t, execAttachInputTypeStdin, input.Type)
+			require.Equal(t, []byte("hello"), input.Data)
+
+			require.NoError(t, conn.ReadJSON(&input))
+			require.Equal(t, execAttachInputTypeCloseStdin, input.Type)
+
+			require.NoError(t, conn.WriteJSON(api.ExecStreamEvent{Type: "stdout", Data: []byte("hello")}))
+			require.NoError(t, conn.WriteJSON(api.ExecStreamEvent{Type: "exit", ExitCode: 0}))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	require.NoError(t, updateEndpoint(configPath, server.URL))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := executeTestApp(context.Background(), &app{
+		configPath: configPath,
+		stdin:      bytes.NewBufferString("hello"),
+		stdout:     stdout,
+		stderr:     stderr,
+	}, []string{
+		"--config", configPath,
+		"box", "exec", "box-1", "-i", "cat",
+	})
+	require.Equal(t, 0, exitCode)
+	require.Equal(t, "hello", stdout.String())
+	require.Empty(t, stderr.String())
+}
+
+func TestMainBoxExecTTYRequiresTerminal(t *testing.T) {
+	configPath := writeLoggedInConfig(t, "http://example.invalid")
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := executeTestApp(context.Background(), &app{
+		configPath: configPath,
+		stdin:      bytes.NewBuffer(nil),
+		stdout:     stdout,
+		stderr:     stderr,
+	}, []string{
+		"--config", configPath,
+		"box", "exec", "box-1", "-t", "/bin/sh",
+	})
+	require.Equal(t, 1, exitCode)
+	require.Empty(t, stdout.String())
+	require.Contains(t, stderr.String(), "-t requires a terminal on stdin and stdout")
+}
+
+func TestParseExecOptionsSupportsCombinedInteractiveTTYFlags(t *testing.T) {
+	options, err := parseExecOptions([]string{"-it"})
+	require.NoError(t, err)
+	require.True(t, options.stdinEnabled)
+	require.True(t, options.tty)
+}
+
 func TestMainBoxCopyUploadsAndDownloadsArchives(t *testing.T) {
 	configPath := writeLoggedInConfig(t, "http://example.invalid")
 
@@ -433,6 +513,21 @@ func writeLoggedInConfig(t *testing.T, endpoint string) string {
 		},
 	}))
 	return configPath
+}
+
+func executeTestApp(ctx context.Context, cliApp *app, args []string) int {
+	if cliApp.stdin == nil {
+		cliApp.stdin = bytes.NewBuffer(nil)
+	}
+	rootCmd := cliApp.newRootCommand()
+	rootCmd.SetArgs(args)
+	rootCmd.SetOut(cliApp.stdout)
+	rootCmd.SetErr(cliApp.stderr)
+	rootCmd.SetContext(ctx)
+	if err := rootCmd.Execute(); err != nil {
+		return cliApp.renderError(err)
+	}
+	return 0
 }
 
 func updateEndpoint(configPath string, endpoint string) error {
@@ -920,6 +1015,21 @@ func TestStreamExecReturnsFailureReason(t *testing.T) {
 	require.Equal(t, 1, exitCode)
 	require.Empty(t, stdout.String())
 	require.Equal(t, "runtime unavailable\n", stderr.String())
+}
+
+func TestStreamExecIgnoresKeepaliveFrames(t *testing.T) {
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	require.NoError(t, encoder.Encode(api.ExecStreamEvent{Type: "keepalive"}))
+	require.NoError(t, encoder.Encode(api.ExecStreamEvent{Type: "stdout", Data: []byte("hello\n")}))
+	require.NoError(t, encoder.Encode(api.ExecStreamEvent{Type: "exit", ExitCode: 0}))
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	exitCode := streamExec(stdout, stderr, bytes.NewReader(body.Bytes()))
+	require.Equal(t, 0, exitCode)
+	require.Equal(t, "hello\n", stdout.String())
+	require.Empty(t, stderr.String())
 }
 
 func TestStreamExecRejectsUnexpectedEOF(t *testing.T) {
